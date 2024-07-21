@@ -11,8 +11,6 @@ import traceback
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from snowboy import snowboydecoder
-
 from robot.LifeCycleHandler import LifeCycleHandler
 from robot.Brain import Brain
 from robot.Scheduler import Scheduler
@@ -20,8 +18,8 @@ from robot.sdk import History
 from robot import (
     AI,
     ASR,
+    VAD,
     config,
-    constants,
     logging,
     NLU,
     Player,
@@ -419,13 +417,10 @@ class Conversation(object):
         try:
             if not silent:
                 self.lifeCycleHandler.onWakeup()
-            listener = snowboydecoder.ActiveListener(
-                [constants.getHotwordModel(config.get("hotword", "wukong.pmdl"))]
-            )
-            voice = listener.listen(
-                silent_count_threshold=config.get("silent_threshold", 15),
-                recording_timeout=config.get("recording_timeout", 5) * 4,
-            )
+            # 
+            
+            listener = VAD.VADListener()
+            voice = listener.listen()
             if not silent:
                 self.lifeCycleHandler.onThink()
             if voice:
