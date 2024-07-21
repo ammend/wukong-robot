@@ -68,6 +68,7 @@ class Conversation(object):
                 voice = utils.getCache(msg)
                 while index != self.tts_index:
                     # 阻塞直到轮到这个音频播放
+                    time.sleep(0.01)
                     continue
                 with self.play_lock:
                     self.player.play(
@@ -83,6 +84,7 @@ class Conversation(object):
                     logger.info(f"第{index}段TTS合成成功。msg: {msg}")
                     while index != self.tts_index:
                         # 阻塞直到轮到这个音频播放
+                        time.sleep(0.01)
                         continue
                     with self.play_lock:
                         logger.info(f"即将播放第{index}段TTS。msg: {msg}")
@@ -90,6 +92,37 @@ class Conversation(object):
                             voice,
                             not cache,
                             onCompleted=lambda: self._lastCompleted(index, onCompleted),
+                        )
+                        self.tts_index += 1
+                    return voice
+                except Exception as e:
+                    logger.error(f"语音合成失败：{e}", stack_info=True)
+                    self.tts_index += 1
+                    traceback.print_exc()
+                    return None
+
+    def _ttsActionNew(self, msg, cache, index, onCompleted=None):
+        if msg:
+            voice = ""
+            if utils.getCache(msg):
+                logger.info(f"第{index}段TTS命中缓存，播放缓存语音")
+                voice = utils.getCache(msg)
+                with self.play_lock:
+                    self.player.play(
+                        voice,
+                        not cache,
+                    )
+                    self.tts_index += 1
+                return voice
+            else:
+                try:
+                    voice = self.tts.get_speech(msg)
+                    logger.info(f"第{index}段TTS合成成功。msg: {msg}")
+                    with self.play_lock:
+                        logger.info(f"即将播放第{index}段TTS。msg: {msg}")
+                        self.player.play(
+                            voice,
+                            not cache,
                         )
                         self.tts_index += 1
                     return voice
@@ -292,6 +325,26 @@ class Conversation(object):
             return result
         return None
 
+    def _tts_new(self, lines, cache, onCompleted=None):
+        audios = []
+        pattern = r"http[s]?://.+"
+        logger.info("_tts_new")
+        with self.tts_lock:
+            i = 0
+            for line in lines:
+                if re.match(pattern, line):
+                    logger.info("内容包含URL，屏蔽后续内容")
+                    self.tts_count -= 1
+                    i+=1
+                    continue
+                if line:
+                    audio = self._ttsActionNew(line, cache=cache, index=i, onCompleted=onCompleted)
+                    audios.append(audio)
+                else:
+                    self.tts_count -= 1
+                i += 1
+            return audios
+    
     def _tts(self, lines, cache, onCompleted=None):
         """
         对字符串进行 TTS 并返回合成后的音频
@@ -302,7 +355,7 @@ class Conversation(object):
         pattern = r"http[s]?://.+"
         logger.info("_tts")
         with self.tts_lock:
-            with ThreadPoolExecutor(max_workers=5) as pool:
+            with ThreadPoolExecutor(max_workers=2) as pool:
                 all_task = []
                 index = 0
                 for line in lines:
@@ -400,7 +453,7 @@ class Conversation(object):
         self.tts_index = 0
         self.tts_count = len(lines)
         logger.debug(f"tts_count: {self.tts_count}")
-        audios = self._tts(lines, cache, onCompleted)
+        audios = self._tts_new(lines, cache, onCompleted)
         self._after_play(msg, audios, plugin)
 
     def activeListen(self, silent=False):

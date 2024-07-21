@@ -330,6 +330,7 @@ class VolcengineASR(object):
         :return:
         """
         audio_type = AudioType.LOCAL
+        text = ""
         asr_http_client = AsrWsClient(
             audio_path=path,
             cluster= self.cluster,
