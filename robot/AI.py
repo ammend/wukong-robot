@@ -520,6 +520,146 @@ class CozeRobot(AbstractRobot):
     def get_config(cls):
         return config.get("coze", {})
 
+    def stream_chat(self, texts):
+        """
+        从 Coze API获取流式回复
+
+        Arguments:
+        texts -- user input, typically speech, to be parsed by a module
+        """
+        msg = "".join(texts)
+        msg = utils.stripPunctuation(msg)
+        logger.info(f"使用模型：{self.SLUG}，开始流式请求，msg: {msg}")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + self.token,
+        }
+   
+        params = {
+                "bot_id": self.botid,
+                "user_id": self.userid,
+                "stream": True,
+                "auto_save_history": True,
+                "additional_messages": [
+                    {"role": "user", "content": msg, "content_type": "text"}
+                ],
+            }
+
+        # 请求接收流式数据
+        try:
+            url = "https://api.coze.cn/v3/chat"
+            response = requests.post(url, headers=headers, json=params, stream=True)
+
+            def generate():
+                import re
+
+                def _parse_sse_message(message: str) -> (str, str):
+                    """
+                    parse sse message to get event name and data
+                    :message: two lines of string
+                    :return: event_name, data
+                    """
+                    # 定义正则表达式来匹配 event 和 data 字段
+                    event_pattern = re.compile(r"event:\s*(.+)", re.IGNORECASE)
+                    data_pattern = re.compile(r"data:\s*(.+)", re.IGNORECASE)
+
+                    # 搜索 event 字段
+                    event_match = event_pattern.search(message)
+                    event = event_match.group(1) if event_match else None
+
+                    # 搜索 data 字段
+                    data_match = data_pattern.search(message)
+                    data = data_match.group(1) if data_match else None
+
+                    return event, data
+
+
+                def _parse_content(data: str) -> (str, str):
+                    """
+                    parse data json to get message type and content
+                    :param data: sse data
+                    :return type: message type
+                    :return content: message content
+                    """
+                    data_json = json.loads(data)
+
+                    content = ""
+                    type = ""
+                    if "content" in data_json:
+                        content = data_json["content"]
+                    if "type" in data_json:
+                        type = data_json["type"]
+                    return type, content
+
+                    
+                sentence = []
+
+                for line in response.iter_lines():
+                    sse = str(line, encoding="utf-8").strip()
+
+                    event, data = _parse_sse_message(sse)
+
+                    if event == "conversation.message.completed":
+                        break
+
+                    if data is None:
+                        continue
+
+                    type, content = _parse_content(data)
+
+                    if type == "answer" and content is not None:
+                        stop_punctuations = {'！', '？', '。', '.', '!', '?'}
+                        match = re.match(r"^(\W*)(.*?)(\W*)$", content)
+                        if match:
+                            punctuation_start, word_part, punctuation_end = match.groups()
+                            if punctuation_start:
+                                # 处理前导标点符号
+                                if sentence and punctuation_start in stop_punctuations:
+                                    # 如果前导标点是句子结束符，输出当前句子并重置
+                                    sentence.append(punctuation_start)
+                                    # 避免句子过短，导致说话断断续续
+                                    sentence_text = "".join(sentence)
+                                    if len(sentence_text) > 5:
+                                        sentence = []
+                                        yield sentence_text
+                                else:
+                                    # 添加前导标点到当前句子
+                                    sentence.append(punctuation_start)
+
+                            if word_part:
+                                sentence.append(word_part)
+
+                            if punctuation_end:
+                                # 处理尾随标点符号
+                                if punctuation_end in stop_punctuations:
+                                    sentence.append(punctuation_start)
+                                    sentence_text = "".join(sentence)
+                                    sentence = []
+                                    yield sentence_text
+                                else:
+                                    # 添加尾随标点到当前句子
+                                    sentence.append(punctuation_end)
+                                    
+                        else:
+                            sentence.append(content)
+
+
+                # 检查是否有剩余的句子没有结束标点
+                if sentence:
+                    sentence_text = "".join(sentence)
+                    yield sentence_text
+            
+        except Exception as e:
+            ee = e
+            logger.error(f"使用模型：{self.SLUG}，流式请求失败，error: {str(ee)}")
+
+
+            def generate():
+                yield "request error:\n" + str(ee)
+
+        return generate
+    
     def chat(self, texts, parsed=None):
         """
         使用coze聊天
